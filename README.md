@@ -191,14 +191,24 @@ configs/baseline.yaml — training hyperparameters
 
 ---
 
-## Self-supervised + ensemble extension
+## Extensions
 
-A follow-up repo, [wafer-ssl](https://github.com/alex8642/wafer-ssl), pushes this
-further: SimCLR contrastive pretraining on the 638k unlabeled maps plus a 4-model
+Two follow-up repos build on this pipeline:
+
+[wafer-ssl](https://github.com/alex8642/wafer-ssl) pushes it further on WM-811K:
+SimCLR contrastive pretraining on the 638k unlabeled maps plus a 4-model
 ensemble reaches **test macro-F1 0.9423** (balanced accuracy 0.9427). An ablation
 against a from-scratch ensemble (0.9339) attributes ~+0.8pp to the self-supervised
 pretraining and the remainder to variance reduction from ensembling — which also
 quantifies the single-seed ±0.01–0.02 variance noted above.
+
+[wafer-mixed](https://github.com/ALEX8642/wafer-mixed) tests whether the pipeline
+generalizes: the same ResNet-18+CBAM, reframed as 8-way **multi-label**
+classification of mixed (superposed) defect patterns on MixedWM38 — test
+macro-F1 0.9846. A transfer study using this repo's checkpoint as donor shows
+pretraining pays only in the low-data regime (+8.8 macro-F1 points at 1 % of
+training data, a wash at ≥10 %), and per-label thresholds at the same 10:1
+cost ratio used here cut label-level escapes 36 %.
 
 ---
 
