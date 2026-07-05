@@ -210,6 +210,16 @@ pretraining pays only in the low-data regime (+8.8 macro-F1 points at 1 % of
 training data, a wash at ≥10 %), and per-label thresholds at the same 10:1
 cost ratio used here cut label-level escapes 36 %.
 
+[wafer-rootcause](https://github.com/ALEX8642/wafer-rootcause) closes the loop
+from defect *pattern* to *equipment cause*: wafer-mixed's classifier outputs are
+joined to a simulated MES/SQL schema (lots, routes, tools, chambers,
+timestamps), and chamber-vs-step commonality analysis — two-proportion z-tests
+with Benjamini–Hochberg FDR control, all in portable SQL — recovers planted
+faults with *scored* precision/recall. Attribution precision holds ~0.90–1.00
+under confounders while recall is honestly low and high-variance
+(0.48 ± 0.30 over seeds); a classifier-noise ablation is a reported null (root
+cause is statistics-bound, not classifier-bound).
+
 ---
 
 ## References
