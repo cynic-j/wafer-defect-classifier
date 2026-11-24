@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import inspect
+import logging
 import re
 import shutil
 import html
@@ -336,6 +337,8 @@ class ProductUI:
             return None, None, None, None, f"**图片未接受：** {public_error(exc)}"
 
     def single(self, path):
+        if not path:
+            return None, None, None, "请先上传晶圆图 PNG，再点击开始检测。"
         result = self.service.single(path)
         if result[0] is None:
             return None, None, None, f"**检测未完成：** {public_error(result[-1])}"
@@ -428,6 +431,43 @@ def _confusion_display(cfg, tmp):
         return None, "混淆矩阵暂时无法读取，请联系管理员核对报告。"
 
 
+def valid_examples(directory):
+    """Return complete one-input rows only; never cache model outputs."""
+    from wafer.demo import _read_png
+    rows = []
+    for path in sorted(Path(directory).glob("*.png")):
+        try:
+            _read_png(path)
+        except (OSError, ValueError) as exc:
+            logging.getLogger(__name__).warning("Skipping invalid demo example %s: %s", path, exc)
+            continue
+        rows.append([str(path.resolve())])
+    return rows
+
+
+def bind_single_events(gr, ui, upload, preview, button, clear, original, heat, overlay, result):
+    """Each file-consuming request directly serializes the same File component.
+
+    Do not mutate File configuration in a predecessor event: it can trigger change
+    while a chained request is collecting inputs. Serialize preview/clear/inference
+    so a queued preview cannot overwrite a completed classification.
+    """
+    serial = dict(concurrency_id="wafer-model", concurrency_limit=1)
+    upload.change(ui.preview, inputs=[upload],
+                  outputs=[preview, original, heat, overlay, result], **serial)
+
+    def run_single(path, progress=gr.Progress()):
+        progress(0, desc="正在分析晶圆图并生成关注区域…")
+        value = ui.single(path)
+        progress(1, desc="分析已结束")
+        return value
+
+    button.click(run_single, inputs=[upload], outputs=[original, heat, overlay, result],
+                 show_progress="full", **serial)
+    clear.click(lambda: (None, None, None, None, None, SINGLE_EMPTY), inputs=[],
+                outputs=[upload, preview, original, heat, overlay, result], **serial)
+
+
 def create_ui(gr, cfg, service):
     ui = ProductUI(service)
     kwargs = {"title": TITLE}
@@ -467,9 +507,10 @@ def create_ui(gr, cfg, service):
                             button = gr.Button("开始检测", variant="primary", interactive=service.ready)
                             clear = gr.Button("清空")
                         gr.Markdown("仅支持约定灰度 PNG：**外部 40 · 通过 160 · 失效 255**。不支持普通照片、SEM 图或带图例截图。")
-                        examples = sorted((Path(cfg.output_dir) / "demo_examples").glob("*.png"))
+                        examples = valid_examples(Path(cfg.output_dir) / "demo_examples")
                         if examples:
-                            gr.Examples([[str(p)] for p in examples], inputs=[upload], label="选择示例晶圆图")
+                            gr.Examples(examples=examples, inputs=[upload], cache_examples=False,
+                                        run_on_click=False, label="选择示例晶圆图")
                     with gr.Column(scale=2, min_width=340):
                         result = gr.Markdown(SINGLE_EMPTY, elem_id="single-result")
                 gr.HTML('<div class="section-heading">检测结果可视化</div><div class="section-caption">热力图展示分类关注区域，不是像素级缺陷分割结果。</div>')
@@ -477,26 +518,8 @@ def create_ui(gr, cfg, service):
                     original = gr.Image(label="原始晶圆图", interactive=False, height=300)
                     heat = gr.Image(label="Grad-CAM++ 热力图", interactive=False, height=300)
                     overlay = gr.Image(label="关注区域叠加图", interactive=False, height=300)
-                upload.change(ui.preview, inputs=[upload], outputs=[preview, original, heat, overlay, result], queue=False)
-                clear.click(lambda: (None, None, None, None, None, SINGLE_EMPTY),
-                            outputs=[upload, preview, original, heat, overlay, result], queue=False)
-
-                def start_single():
-                    return gr.Button(interactive=False), gr.File(interactive=False), gr.Button(interactive=False), "### 正在检测…\n\n正在分析缺陷模式并生成关注区域，请稍候。", None, None
-
-                def finish_single():
-                    return gr.Button(interactive=service.ready), gr.File(interactive=True), gr.Button(interactive=True)
-
-                def run_single(path, progress=gr.Progress()):
-                    progress(0, desc="正在分析晶圆图并生成关注区域…")
-                    value = ui.single(path)
-                    progress(1, desc="分析已结束")
-                    return value
-
-                event = button.click(start_single, outputs=[button, upload, clear, result, heat, overlay], queue=False)
-                event = event.then(run_single, inputs=[upload], outputs=[original, heat, overlay, result],
-                                   concurrency_id="wafer-model", concurrency_limit=1, show_progress="full")
-                event.then(finish_single, outputs=[button, upload, clear], queue=False)
+                bind_single_events(gr, ui, upload, preview, button, clear,
+                                   original, heat, overlay, result)
             with gr.Tab("批量检测", id="batch"):
                 gr.HTML(heading("批量检测", "一次上传多张晶圆图，连续分析并汇总结果。每批最多 100 张。"))
                 files = gr.File(label="上传多张 PNG 晶圆图", file_count="multiple", file_types=[".png"], type="filepath")
