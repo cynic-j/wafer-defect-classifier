@@ -242,11 +242,11 @@ def _build_markdown(pred_cls, cal_probs, temperature, calibrated=False):
     from wafer.demo_ui import class_label
     top3 = cal_probs.argsort()[::-1][:3]
     rows = "\n".join(f"| {class_label(CLASS_NAMES[i])} | {cal_probs[i]:.2%} |" for i in top3)
-    status = f"已加载温度参数 T={temperature:.4f}（当前推理管线校准效果仍需验证）" if calibrated else "未校准（T=1.0）"
+    status = "已应用概率校准参数，可靠性仍需结合评估" if calibrated else "未校准，请结合人工复核"
     return (
-        f"## 本次检测：{class_label(CLASS_NAMES[pred_cls])}\n\n"
-        f"**模型输出概率：{cal_probs[pred_cls]:.2%}** · {status}\n\n"
-        "概率是模型输出分数，不等于可靠性保证。\n\n"
+        f"## {class_label(CLASS_NAMES[pred_cls])}\n\n"
+        f"### 模型置信度：{cal_probs[pred_cls]:.2%}\n\n"
+        f"{status}。置信度为模型输出概率，不等于实际正确率。\n\n"
         "### Top-3 候选类别\n\n| 类别 | 模型概率 |\n|---|---|\n" + rows +
         f"\n\n### 空间特征辅助分析\n\n{_PROCESS_NOTES[CLASS_NAMES[pred_cls]]}\n\n"
         "辅助分析仅描述空间分布，不是已验证的工艺根因诊断；预测不能用于自动放行。"
@@ -382,12 +382,11 @@ class DemoService:
             rgb = np.stack([wafer] * 3, axis=-1)
             overlay = (0.55 * rgb + 0.45 * heat_rgb).clip(0, 255).astype(np.uint8)
             md = _build_markdown(pred, probs, self.temperature, self.calibrated)
-            md += "\n\n决策规则：" + ("已加载类别阈值。" if self.thresholds else "原始概率 argmax（无类别阈值文件）。")
             return arr, heat_rgb, overlay, md
         except Exception as exc:
             return None, None, None, f"**检测未完成：** {str(exc)}\n\n未输出可靠检测结论。"
 
-    def batch(self, paths):
+    def batch(self, paths, progress=None):
         from wafer.demo_ui import class_label
         counts = {name: 0 for name in CLASS_NAMES}
         rows = []
@@ -397,7 +396,9 @@ class DemoService:
             return [], [[class_label(k), 0] for k in counts], None, "请先上传 PNG 文件。"
         if len(paths) > 100:
             return [], [[class_label(k), 0] for k in counts], None, "单批最多 100 张，请分批检测。"
-        for path in paths:
+        if progress is not None:
+            progress((0, len(paths)), desc=f"已处理 0/{len(paths)} 张 · 成功 0 · 失败 0")
+        for index, path in enumerate(paths, 1):
             name = Path(str(path)).name
             try:
                 arr = _read_png(path)
@@ -410,6 +411,9 @@ class DemoService:
                 rows.append([name, class_label(cls), float(probs[pred]), "成功", ""])
             except Exception as exc:
                 rows.append([name, "", None, "拒绝/失败", str(exc)])
+            if progress is not None:
+                ok = sum(counts.values())
+                progress((index, len(paths)), desc=f"已处理 {index}/{len(paths)} 张 · 成功 {ok} · 失败 {index-ok}")
         export = self.tmp / f"batch_{uuid.uuid4().hex}.csv"
         with export.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.writer(handle)
@@ -473,6 +477,11 @@ def main():
         # Gradio 6 moved app-level CSS from Blocks to launch.
         if "css" in inspect.signature(app.launch).parameters:
             kwargs["css"] = CSS
+        launch_params = inspect.signature(app.launch).parameters
+        if "footer_links" in launch_params:
+            kwargs["footer_links"] = []
+        elif "show_api" in launch_params:
+            kwargs["show_api"] = False
         app.launch(**kwargs)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         parser.exit(1, f"系统启动失败：{exc}\n")
